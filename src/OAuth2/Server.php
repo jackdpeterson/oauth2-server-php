@@ -32,6 +32,10 @@ use OAuth2\GrantType\RefreshToken;
 use OAuth2\GrantType\AuthorizationCode;
 use OAuth2\Storage\JwtAccessToken as JwtAccessTokenStorage;
 use OAuth2\Storage\JwtAccessTokenInterface;
+use SplSubject;
+use SplObjectStorage;
+use SplObserver;
+use OAuth2\ObserverPattern\Oauth2ObservableEvent;
 
 /**
 * Server class for OAuth2
@@ -44,7 +48,8 @@ use OAuth2\Storage\JwtAccessTokenInterface;
 class Server implements ResourceControllerInterface,
     AuthorizeControllerInterface,
     TokenControllerInterface,
-    UserInfoControllerInterface
+    UserInfoControllerInterface,
+    SplSubject
 {
     // misc properties
     protected $response;
@@ -63,6 +68,10 @@ class Server implements ResourceControllerInterface,
     protected $tokenType;
     protected $scopeUtil;
     protected $clientAssertionType;
+    
+    // Observers for receiving events
+    protected $observers;
+    protected $mostRecentObservableEvent;
 
     protected $storageMap = array(
         'access_token' => 'OAuth2\Storage\AccessTokenInterface',
@@ -140,6 +149,8 @@ class Server implements ResourceControllerInterface,
         if ($this->config['use_openid_connect']) {
             $this->validateOpenIdConnect();
         }
+        
+        $this->observers = new SplObjectStorage();
     }
 
     public function getAuthorizeController()
@@ -255,9 +266,12 @@ class Server implements ResourceControllerInterface,
      */
     public function handleTokenRequest(RequestInterface $request, ResponseInterface $response = null)
     {
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'start', array('request' => $request, 'response' => $response));
+        $this->notify();
         $this->response = is_null($response) ? new Response() : $response;
         $this->getTokenController()->handleTokenRequest($request, $this->response);
-
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'finish', array('request' => $request, 'response' => $response));
+        $this->notify();
         return $this->response;
     }
 
@@ -281,9 +295,12 @@ class Server implements ResourceControllerInterface,
      */
     public function handleRevokeRequest(RequestInterface $request, ResponseInterface $response = null)
     {
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'start', array('request' => $request, 'response' => $response));
+        $this->notify();
         $this->response = is_null($response) ? new Response() : $response;
         $this->getTokenController()->handleRevokeRequest($request, $this->response);
-
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'finish', array('request' => $request, 'response' => $response));
+        $this->notify();
         return $this->response;
     }
 
@@ -318,8 +335,11 @@ class Server implements ResourceControllerInterface,
     public function handleAuthorizeRequest(RequestInterface $request, ResponseInterface $response, $is_authorized, $user_id = null)
     {
         $this->response = $response;
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'start', array('request' => $request, 'response' => null));
+        $this->notify();
         $this->getAuthorizeController()->handleAuthorizeRequest($request, $this->response, $is_authorized, $user_id);
-
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'finish', array('request' => $request, 'response' => $response));
+        $this->notify();
         return $this->response;
     }
 
@@ -344,17 +364,23 @@ class Server implements ResourceControllerInterface,
      */
     public function validateAuthorizeRequest(RequestInterface $request, ResponseInterface $response = null)
     {
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'start', array('request' => $request, 'response' => $response));
+        $this->notify();
         $this->response = is_null($response) ? new Response() : $response;
         $value = $this->getAuthorizeController()->validateAuthorizeRequest($request, $this->response);
-
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'finish', array('request' => $request, 'response' => $response));
+        $this->notify();
         return $value;
     }
 
     public function verifyResourceRequest(RequestInterface $request, ResponseInterface $response = null, $scope = null)
     {
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'start', array('request' => $request, 'response' => $response, 'scope' => $scope));
+        $this->notify();
         $this->response = is_null($response) ? new Response() : $response;
         $value = $this->getResourceController()->verifyResourceRequest($request, $this->response, $scope);
-
+        $this->mostRecentObservableEvent = new Oauth2ObservableEvent(__METHOD__, 'finish', array('request' => $request, 'response' => $response, 'scope' => $scope));
+        $this->notify();
         return $value;
     }
 
@@ -829,4 +855,36 @@ class Server implements ResourceControllerInterface,
     {
         return isset($this->config[$name]) ? $this->config[$name] : $default;
     }
+
+    /**
+    * {@inheritDoc}
+    * @see SplSubject::attach()
+    */
+    public function attach(SplObserver $observer) {
+        $this->observers->attach($observer);    
+    }
+    
+    /**
+    * {@inheritDoc}
+    * @see SplSubject::detach()
+    */
+    public function detach(SplObserver $observer) {
+        $this->observers->detach($observer);
+    
+    }
+    
+    /**
+    * {@inheritDoc}
+    * @see SplSubject::notify()
+    */
+    public function notify() {
+        foreach($this->observers as $observer) {
+            $observer->update($this);
+        }
+    }
+    
+    public function getMostRecentObservableEvent() {
+     return $this->mostRecentObservableEvent;
+    }
+
 }
